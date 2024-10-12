@@ -5,6 +5,7 @@ import pandas as pd
 import schedulefree
 import math
 
+
 class Trainer:
     def __init__(self, 
                  net, num_epochs, device, 
