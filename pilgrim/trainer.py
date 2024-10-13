@@ -5,15 +5,15 @@ import pandas as pd
 import schedulefree
 import math
 
-
 class Trainer:
     def __init__(self, 
                  net, num_epochs, device, 
-                 batch_size=10000, lr=0.001, name="", K_min=1, K_max=55, 
-                 all_moves=None, inverse_moves=None, V0=None, 
-                 optimizer='Adam' # Adam or AdamSF
+                 batch_size=10000, lr=0.001, name="", K_min=1, K_max=100, 
+                 n=None, parity=0,
+                 optimizer='Adam'
                 ):
         self.net = net.to(device)
+        self.parity = parity
         self.lr = lr
         self.device = device
         self.num_epochs = num_epochs
@@ -33,32 +33,48 @@ class Trainer:
         self.K_min = K_min
         self.K_max = K_max
         self.walkers_num = 1_000_000 // self.K_max
-        self.all_moves = all_moves
-        self.n_gens = all_moves.size(0)
-        self.state_size = all_moves.size(1)
-        self.inverse_moves = inverse_moves
-        self.V0 = V0
+
+        # Compute N and initialize V0
+        N = 3 * n**2 - 3 * n + 1
+        self.N = N  # Save N in the instance
+        dtype_int = torch.uint8
+        self.V0 = torch.arange(N, dtype=dtype_int).unsqueeze(0).to(device)
+
+        # Load generators
+        with open(f"generators/{n}.txt") as f:
+            generators_str = f.readline()
+        self.generators = torch.tensor(eval(generators_str), dtype=torch.int64).to(device)
+
+        self.state_size = self.V0.size(1)
         os.makedirs(self.log_dir, exist_ok=True)
         os.makedirs(self.weights_dir, exist_ok=True)
 
-    def do_random_step(self, states, last_moves):
-        """Perform a random step while avoiding inverse moves."""
-        possible_moves = torch.ones((states.size(0), self.n_gens), dtype=torch.bool, device=self.device)
-        possible_moves[torch.arange(states.size(0)), self.inverse_moves[last_moves]] = False
-        next_moves = torch.multinomial(possible_moves.float(), 1).squeeze()
-        new_states = torch.gather(states, 1, self.all_moves[next_moves])
-        return new_states, next_moves
+    def random_step(self, J, states, zeropos):
+        """Perform a random step based on the new logic."""
+        random_permutations = 2 * torch.randint(0, 6, (states.size(0),), device=self.device)
+        if J % 2 == 0:
+            random_permutations += 1
+
+        from_positions, to_positions = self.generators[zeropos, random_permutations].unbind(1)
+        moved_values = torch.gather(states, 1, from_positions)
+        states.scatter_(1, to_positions, moved_values)
+        zeropos = torch.sum((moved_values == 0) * to_positions, dim=1)
+
+        return states, zeropos
 
     def generate_random_walks(self, k=1000, K_min=1, K_max=30):
-        """Generate random walks for training."""
-        X = torch.zeros(((K_max - K_min + 1) * k, self.state_size), dtype=torch.int8, device=self.device)
+        """Generate random walks for training using the new random_step."""
+        total_samples = (K_max - K_min + 1) * k
+        X = torch.zeros((total_samples, self.state_size), dtype=self.V0.dtype, device=self.device)
         Y = torch.arange(K_min, K_max + 1, device=self.device).repeat_interleave(k)
 
         for j, K in enumerate(range(K_min, K_max + 1)):
             states = self.V0.repeat(k, 1)
-            last_moves = torch.full((k,), -1, dtype=torch.int64, device=self.device)
-            for _ in range(K):
-                states, last_moves = self.do_random_step(states, last_moves)
+            zeropos = torch.zeros(k, dtype=torch.long, device=self.device)  # Assuming zero starts at position 0
+
+            for J in range(K):
+                states, zeropos = self.random_step(self.parity + J, states, zeropos)
+
             X[j * k:(j + 1) * k] = states
 
         perm = torch.randperm(X.size(0), device=self.device)

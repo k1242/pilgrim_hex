@@ -50,6 +50,6 @@ def get_unique_states(states, states_bad_hashed, hash_vec):
 #     print(f'debug (get_unique_states): {idx2.shape = }')
     mask2 = torch.concat((torch.tensor([True], device=states.device), hashed_sorted[1:] - hashed_sorted[:-1] > 0))
 #     print(f'debug (get_unique_states): {mask2.shape = }')
-    return states[mask1][idx2[mask2]], idx1[mask1][idx2[mask2]] 
+    return states[mask1][idx2[mask2]], idx1[mask1][idx2[mask2]], states_bad_hashed
 
 
